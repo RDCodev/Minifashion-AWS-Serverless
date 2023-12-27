@@ -1,4 +1,4 @@
-import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs"
+import { SQSClient, SendMessageCommand  } from "@aws-sdk/client-sqs";
 
 // ************** CONST *********
 
@@ -12,15 +12,15 @@ const SQS_SQL = {
 
 const client = new SQSClient({ region: REGION });
 
-// *********** VARS *********
+//************* VARS **********
 
 const sqlContext = [
   {
-    context: 'customers',
+    context: 'product',
     transactions: [
       {
         action: 'create',
-        sqlStatement: 'CALL sp_I_customer',
+        sqlStatement: 'CALL sp_I_product',
         params: []
       },
       {
@@ -36,11 +36,11 @@ const sqlContext = [
     ]
   },
   {
-    context: 'addresses',
+    context: 'variants',
     transactions: [
       {
         action: 'create',
-        sqlStatement: 'CALL sp_I_address',
+        sqlStatement: 'INSERT INTO mf_products_variants VALUES',
         params: []
       },
       {
@@ -57,40 +57,39 @@ const sqlContext = [
   }
 ];
 
+
 //************** FUNCTIONS ********
 
+//const freezeObject = (object) => Object.freeze(object)
+
 const retrieveSQLStatements = (content) => {
-  const { action, default_address, addresses, ...params } = content
-  const [ contextCustomers, contextAddresses ] = sqlContext
   
-  const sqlCustomers = contextCustomers.transactions
-    .filter(trans => trans.action == action)
-    .map(trans => {
-      
-      params.accepts_marketing != 'not_subscribed' ?  
-        params.accepts_marketing = 1 :
-        params.accepts_marketing = 0
-      
-      return `${trans.sqlStatement}('${Object.values(params).join("\",\"")}')`
-    })
+  const { action, variants: [variants], ...params} = content;
+  const [ contextProducts, contextVariants ] = sqlContext
   
-  const addressesValues =  [
-    ...Array(Object.values(addresses).reduce((a, {length}) => Math.max(a, length), 0))
-  ].map((_, i) => Object.keys(addresses).reduce((a, k) => ({...a, [k]: addresses[k][i]}), {}));
-  
-  const sqlAddresses = contextAddresses.transactions
+  const sqlProducts = contextProducts.transactions
   .filter(trans => trans.action == action)
   .map(trans => {
-    return `${
-      Object.values(addressesValues)
+      return `${trans.sqlStatement} ("${Object.values(params).join("\",\"")}")`
+  })
+  
+  const variantsValues =  [
+    ...Array(Object.values(variants).reduce((a, {length}) => Math.max(a, length), 0))
+  ].map((_, i) => Object.keys(variants).reduce((a, k) => ({...a, [k]: variants[k][i]}), {}));
+  
+  const sqlVariants = contextVariants.transactions
+  .filter(trans => trans.action == action)
+  .map(trans => {
+    return `${ trans.sqlStatement} ${
+      Object.values(variantsValues)
         .map(value => {
-          return `${trans.sqlStatement}  ("${Object.values(value).join("\",\"")}")`    
-      })
+          return `("${Object.values(value).join("\",\"")}")`    
+      }).join(',')
     }`
   })
   
-  return {payload: [...sqlCustomers, ...sqlAddresses]}
-}
+  return { payload: [...sqlProducts, ...sqlVariants] };
+};
 
 const sendSQSMessage = async (content, sqsUrl) => {
   
@@ -113,13 +112,14 @@ const sendSQSMessage = async (content, sqsUrl) => {
 
 //********** HANDLER **********
 
-export const handler = async (event) => {
+export const handler = async (event, context) => {
+  
+  console.log(event)
   
   const [data] = event;
+  
   const { url } = SQS_SQL;
   const { payload } = retrieveSQLStatements(data);
-  
-  console.log(payload, event)
   
   try {
     const res = await sendSQSMessage({queries: payload}, url);
